@@ -14,6 +14,8 @@ import re
 import csv
 import json
 import tempfile
+import shutil
+from contextlib import nullcontext
 
 # Equation-analysis reward
 from .equation_functions import (
@@ -53,7 +55,7 @@ def _numeric_gradient_hook(name: str):
 
 class GRPOTrainer:
     """
-    Group Robust Policy Optimization trainer for fine-tuning language models.
+    Group Relative Policy Optimization trainer for fine-tuning language models.
     Uses MSE as reward signal where lower MSE results in higher reward.
     """
     
@@ -62,7 +64,7 @@ class GRPOTrainer:
         model_name: str,
         learning_rate: float = 1e-5,
         batch_size: int = 4,
-        max_length: int = 512,
+        max_length: Optional[int] = None,
         reward_scaling: float = 10.0,
         min_mse_threshold: float = 1e-15,
         buffer_size: int = 1000,
@@ -81,8 +83,8 @@ class GRPOTrainer:
         # Tunable training hyperparameters: per-device batch and gradient accumulation
         per_device_train_batch_size: int = 4,
         gradient_accumulation_steps: int = 4,
-        # Warmup / skip-first-N-generations control
-        warmup_generations: int = 4,
+        # Legacy generation-based warmup; new runs use warmup_samples below.
+        warmup_generations: Optional[int] = None,
         samples_per_prompt: Optional[int] = None,
         warmup_min_global_samples: Optional[int] = None,
         # PiT-PO Dual-Constraint configs (Paper Section 3.1 & 3.2)
@@ -111,6 +113,10 @@ class GRPOTrainer:
         backward_stability_scale: float = 128.0,
         checkpoint_dir: Optional[str] = None,
         checkpoint_every: int = 100,
+        grpo_clip_epsilon: float = 0.2,
+        grpo_kl_beta: float = 0.01,
+        warmup_samples: int = 200,
+        seed: int = 3408,
     ):
         """
         Initialize GRPO trainer.
@@ -119,7 +125,7 @@ class GRPOTrainer:
             model_name: Hugging Face model name or path
             learning_rate: Learning rate for optimization
             batch_size: Batch size for training
-            max_length: Maximum sequence length
+            max_length: Training context length; defaults to max_seq_length
             reward_scaling: Scaling factor for log reward transformation
             min_mse_threshold: Minimum MSE threshold to prevent log(0)
             buffer_size: Maximum size of training buffer
@@ -130,9 +136,9 @@ class GRPOTrainer:
             lora_target_modules: Target modules for LoRA injection; if None will be resolved for common LLaMA blocks
             per_device_train_batch_size: training batch size per device
             gradient_accumulation_steps: gradient-accumulation steps (effective batch = per_device * accum)
-            warmup_generations: number of generations to skip GRPO fine-tuning for (default: 4)
-            samples_per_prompt: samples per prompt (used to infer the global sample count from generations)
-            warmup_min_global_samples: explicit minimum global_sample_nums threshold to trigger training; overrides the two above when provided
+            warmup_generations: Optional legacy warmup expressed in generation rounds
+            samples_per_prompt: Number of candidate equations per generation round
+            warmup_min_global_samples: Optional legacy absolute sample-index threshold
             ast_complexity_weight: lambda_len for P_cplx = lambda_len * AST_node_count (Paper Eq. 8)
             enable_physical_penalty: enable gated physical penalty P_phy (Paper Eq. 9)
             phy_penalty_dim: penalty for dimensional inconsistency
@@ -142,11 +148,17 @@ class GRPOTrainer:
             enable_coef_penalty: enable Support Exclusion Theorem penalty (Paper Eq. 5-6)
             coef_ratio_threshold: rho threshold on tau_i = |b_i|/(sum|b_j|+eps)
             coef_penalty_weight: scaling coefficient p in P_tok = p * max(0, -ln(|b_i|+eps))
+            grpo_clip_epsilon: PPO/GRPO probability-ratio clipping range (default: 0.2)
+            grpo_kl_beta: KL weight against the frozen base model (default: 0.01)
+            warmup_samples: Number of candidate equations without training (default: 200)
         """
         self.model_name = model_name
+        self.seed = int(seed)
         self.learning_rate = learning_rate
         self.batch_size = batch_size
-        self.max_length = max_length
+        self.max_length = int(max_seq_length if max_length is None else max_length)
+        if not 2 <= self.max_length <= int(max_seq_length):
+            raise ValueError("max_length must be between 2 and max_seq_length")
         self.reward_scaling = reward_scaling
         self.min_mse_threshold = min_mse_threshold
         self.buffer_size = buffer_size
@@ -164,17 +176,28 @@ class GRPOTrainer:
             raise ValueError("gradient_accumulation_steps must be positive")
         
         # Warmup-related configuration
-        self.warmup_generations = warmup_generations
         self.samples_per_prompt = samples_per_prompt
-        # Compat: if an explicit threshold is given, use it; otherwise derive from generations and samples_per_prompt; otherwise degrade to warmup_generations+1
-        if warmup_min_global_samples is not None:
-            self.warmup_min_global_samples = int(warmup_min_global_samples)
-        elif self.samples_per_prompt is not None:
-            # global_sample_nums starts at 1; skipping N gens => threshold = N*samples_per_prompt + 1
-            self.warmup_min_global_samples = int(self.warmup_generations * self.samples_per_prompt + 1)
-        else:
-            # When samples-per-generation is unknown, approximate as 1 per gen — still skips the first N reliably
-            self.warmup_min_global_samples = int(self.warmup_generations + 1)
+        self.warmup_generations = warmup_generations
+        self.warmup_samples = int(warmup_samples)
+        if warmup_generations is not None:
+            if int(warmup_generations) < 0:
+                raise ValueError("warmup_generations must be non-negative")
+            self.warmup_samples = int(warmup_generations) * int(samples_per_prompt or 1)
+        if self.warmup_samples < 0:
+            raise ValueError("warmup_samples must be non-negative")
+        # Keep progress independently of buffer retention. Candidate indices
+        # start at one; the default gate first permits candidate 201.
+        self.candidate_count = 0
+        self.warmup_min_global_samples = (
+            int(warmup_min_global_samples)
+            if warmup_min_global_samples is not None else None
+        )
+        self.grpo_clip_epsilon = float(grpo_clip_epsilon)
+        self.grpo_kl_beta = float(grpo_kl_beta)
+        if not math.isfinite(self.grpo_clip_epsilon) or not 0.0 < self.grpo_clip_epsilon < 1.0:
+            raise ValueError("grpo_clip_epsilon must be finite and between 0 and 1")
+        if not math.isfinite(self.grpo_kl_beta) or self.grpo_kl_beta < 0.0:
+            raise ValueError("grpo_kl_beta must be finite and non-negative")
         
         # AST complexity penalty (Paper Eq. 8)
         self.ast_complexity_weight = float(ast_complexity_weight)
@@ -217,6 +240,7 @@ class GRPOTrainer:
         self.checkpoint_dir = checkpoint_dir
         self.checkpoint_every = max(0, int(checkpoint_every))
         self.training_updates = 0
+        self._last_adapter_checkpoint_dir: Optional[str] = None
         self._runtime_mode = "initializing"
         self._last_training_completed_at: Optional[float] = None
         self._last_train_to_generation_seconds: Optional[float] = None
@@ -248,6 +272,7 @@ class GRPOTrainer:
             fast_inference=self.fast_inference,
             max_lora_rank=self.lora_r,
             gpu_memory_utilization=self.vllm_gpu_memory_utilization,
+            random_state=self.seed,
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -261,7 +286,7 @@ class GRPOTrainer:
                 lora_dropout=self.lora_dropout,
                 target_modules=target_modules,
                 use_gradient_checkpointing=peft_gradient_checkpointing,
-                random_state=3408,
+                random_state=self.seed,
             )
             try:
                 self.model.print_trainable_parameters()
@@ -276,12 +301,14 @@ class GRPOTrainer:
         self.enter_inference_mode()
         logger.info(
             "Initialized shared GRPO runtime with model %s | LoRA=%s | 4bit=%s "
-            "| fast_inference=%s | warmup_min_global_samples=%s",
+            "| fast_inference=%s | warmup_samples=%s | clip_epsilon=%s | kl_beta=%s",
             model_name,
             self.use_lora,
             self.load_in_4bit,
             self.fast_inference,
-            self.warmup_min_global_samples,
+            self.warmup_samples,
+            self.grpo_clip_epsilon,
+            self.grpo_kl_beta,
         )
 
     def enter_training_mode(self) -> None:
@@ -421,24 +448,108 @@ class GRPOTrainer:
         return str(value)
 
     def save_adapter_checkpoint(self, save_dir: str, reason: str) -> str:
-        """Persist a small recovery checkpoint without merging the base model."""
+        """Publish a complete adapter, then delete superseded recovery checkpoints.
+
+        One completed checkpoint is retained per run, across periodic, final
+        and emergency saves. A failed save leaves the previous checkpoint intact.
+        """
         if not self.use_lora:
             logger.info("Skipping adapter checkpoint because GRPO/LoRA is disabled")
             return save_dir
-        os.makedirs(save_dir, exist_ok=True)
-        self.model.save_pretrained(save_dir)
-        self.tokenizer.save_pretrained(save_dir)
+        destination = os.path.abspath(save_dir)
+        parent = os.path.dirname(destination)
+        name = os.path.basename(destination)
+        if not name:
+            raise ValueError("A checkpoint must have its own directory")
+        os.makedirs(parent, exist_ok=True)
+        staging = tempfile.mkdtemp(prefix=f".{name}.pending-", dir=parent)
         state = {
             "reason": reason,
             "model_name": self.model_name,
+            "seed": getattr(self, 'seed', 3408),
             "training_updates": self.training_updates,
+            "candidate_count": self.candidate_count,
+            "warmup_samples": self.warmup_samples,
+            "grpo_clip_epsilon": self.grpo_clip_epsilon,
+            "grpo_kl_beta": self.grpo_kl_beta,
+            "checkpoint_retention_limit": 1,
             "scores_since_finetune": self.scores_since_finetune,
             "training_buffer": self.training_buffer,
         }
-        with open(os.path.join(save_dir, "pitpo_training_state.json"), "w", encoding="utf-8") as handle:
-            json.dump(state, handle, ensure_ascii=False, indent=2, default=self._json_default)
-        logger.info("Saved %s adapter checkpoint to %s", reason, save_dir)
+        backup = None
+        try:
+            self.model.save_pretrained(staging, safe_serialization=True)
+            self.tokenizer.save_pretrained(staging)
+            with open(os.path.join(staging, "pitpo_training_state.json"), "w", encoding="utf-8") as handle:
+                json.dump(state, handle, ensure_ascii=False, indent=2, default=self._json_default)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # Validate the actual safetensors header and payload size before
+            # making this the replacement for a usable recovery checkpoint.
+            from safetensors import safe_open
+            with safe_open(os.path.join(staging, "adapter_model.safetensors"), framework="pt") as weights:
+                if not weights.keys():
+                    raise RuntimeError("The saved LoRA checkpoint has no tensors")
+            with open(os.path.join(staging, "adapter_config.json"), encoding="utf-8") as handle:
+                json.load(handle)
+
+            if os.path.lexists(destination):
+                if not os.path.isdir(destination) or os.path.islink(destination):
+                    raise ValueError("The checkpoint destination must be a regular directory")
+                existing_state = os.path.join(destination, "pitpo_training_state.json")
+                if os.listdir(destination) and not os.path.isfile(existing_state):
+                    raise ValueError("Refusing to replace a directory without checkpoint state")
+                backup = tempfile.mkdtemp(prefix=f".{name}.previous-", dir=parent)
+                os.rmdir(backup)
+                os.replace(destination, backup)
+            try:
+                os.replace(staging, destination)
+            except BaseException:
+                if backup is not None:
+                    os.replace(backup, destination)
+                    backup = None
+                raise
+        finally:
+            if os.path.isdir(staging):
+                shutil.rmtree(staging)
+
+        if backup is not None:
+            shutil.rmtree(backup)
+        self._prune_adapter_checkpoints(destination)
+        self._last_adapter_checkpoint_dir = destination
+        logger.info("Saved %s adapter checkpoint to %s; retaining this checkpoint only", reason, save_dir)
         return save_dir
+
+    def _prune_adapter_checkpoints(self, latest_dir: str) -> None:
+        """Remove this run's older adapters only after the new one is published."""
+        candidates = set()
+        checkpoint_dir = getattr(self, "checkpoint_dir", None)
+        if checkpoint_dir:
+            checkpoint_dir = os.path.abspath(checkpoint_dir)
+            if os.path.isdir(checkpoint_dir):
+                with os.scandir(checkpoint_dir) as entries:
+                    candidates.update(entry.path for entry in entries
+                                      if entry.is_dir(follow_symlinks=False)
+                                      and re.fullmatch(r"checkpoint-\d+", entry.name))
+            run_root = os.path.dirname(checkpoint_dir)
+            candidates.update(os.path.join(run_root, name)
+                              for name in ("final_adapter", "emergency_adapter"))
+        previous = getattr(self, "_last_adapter_checkpoint_dir", None)
+        if previous:
+            candidates.add(previous)
+        for candidate in sorted(candidates):
+            if candidate == latest_dir or not os.path.isdir(candidate) or os.path.islink(candidate):
+                continue
+            state_path = os.path.join(candidate, "pitpo_training_state.json")
+            try:
+                with open(state_path, encoding="utf-8") as handle:
+                    previous_state = json.load(handle)
+            except (OSError, ValueError):
+                continue
+            if previous_state.get("model_name") != self.model_name:
+                continue
+            shutil.rmtree(candidate)
+            logger.info("Deleted superseded adapter checkpoint: %s", candidate)
 
     def _save_periodic_checkpoint_if_needed(self) -> None:
         if not self.checkpoint_dir or not self.checkpoint_every:
@@ -533,6 +644,10 @@ class GRPOTrainer:
             mse: Mean squared error for this response
             **metadata: Additional metadata
         """
+        sample_index = metadata.get("global_sample_nums")
+        if sample_index is not None:
+            self.candidate_count = max(self.candidate_count, int(sample_index))
+
         # First, filter for input validity and positive-score entries (score>0 => drop)
         if mse is None or not np.isfinite(mse) or mse <= 0:
             logger.debug(f"Discarding experience due to invalid MSE: {mse}")
@@ -706,6 +821,7 @@ class GRPOTrainer:
             offsets_batch = None
 
         token_penalty_weights: List[List[float]] = []
+        completion_masks: List[List[int]] = []
         for exp_idx, exp in enumerate(exps):
             seq_len = int(encodings["input_ids"][exp_idx].shape[0]) if hasattr(encodings["input_ids"][exp_idx], 'shape') else len(encodings["input_ids"][exp_idx])
             weights_vec = [0.0] * seq_len
@@ -715,6 +831,34 @@ class GRPOTrainer:
             response_text = exp.get("response", "")
             full_text = (prompt_text or "") + (response_text or "")
             prompt_char_len = len(prompt_text or "")
+
+            # Only generated tokens participate in the policy objective and KL.
+            # Offsets also handle a token spanning the prompt/response boundary.
+            completion_mask = [0] * seq_len
+            if offsets_batch is not None and exp_idx < len(offsets_batch):
+                for t_idx, (tok_s, tok_e) in enumerate(offsets_batch[exp_idx]):
+                    if tok_e > prompt_char_len and encodings["attention_mask"][exp_idx][t_idx]:
+                        completion_mask[t_idx] = 1
+            else:
+                # Slow-tokenizer fallback: find the common token prefix, rather
+                # than assuming separate tokenization keeps the boundary token.
+                prompt_ids = self.tokenizer(
+                    prompt_text, truncation=True, max_length=self.max_length,
+                )["input_ids"]
+                full_ids = encodings["input_ids"][exp_idx].tolist()
+                prefix_length = 0
+                for prompt_id, full_id in zip(prompt_ids, full_ids):
+                    if prompt_id != full_id:
+                        break
+                    prefix_length += 1
+                for t_idx in range(prefix_length, seq_len):
+                    completion_mask[t_idx] = int(encodings["attention_mask"][exp_idx][t_idx])
+            if not any(completion_mask[1:]):
+                raise ValueError(
+                    "Training sequence has no completion tokens; increase max_length "
+                    "or shorten the search prompt"
+                )
+            completion_masks.append(completion_mask)
 
             # Small-index penalties per index based on optimized params
             penalty_by_index: Dict[int, float] = {}
@@ -770,11 +914,86 @@ class GRPOTrainer:
         dataset_dict = {
             "input_ids": encodings["input_ids"].tolist(),
             "attention_mask": encodings["attention_mask"].tolist(),
+            "completion_mask": completion_masks,
             "rewards": rewards,
             "token_penalty_weights": token_penalty_weights,
         }
         
         dataset = Dataset.from_dict(dataset_dict)
+        return dataset
+
+    @staticmethod
+    def _token_log_probs(
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Gather causal token log probabilities, excluding masked targets first."""
+        shift_logits = logits[..., :-1, :]
+        shift_labels = labels[..., 1:].contiguous()
+        valid_token_mask = attention_mask[..., 1:].bool() & shift_labels.ne(-100)
+        if not bool(valid_token_mask.any()):
+            raise FloatingPointError("GRPO batch contains no valid language-model tokens")
+
+        valid_logits = shift_logits[valid_token_mask].float()
+        if os.environ.get("PITPO_DEBUG_NUMERICS") == "1" and valid_logits.requires_grad:
+            valid_logits.register_hook(_numeric_gradient_hook("valid_logits"))
+        valid_log_probs = -torch.nn.functional.cross_entropy(
+            valid_logits, shift_labels[valid_token_mask], reduction="none",
+        )
+        if not bool(torch.isfinite(valid_log_probs).all()):
+            raise FloatingPointError("GRPO produced non-finite valid-token log probabilities")
+        log_probs = torch.zeros_like(shift_labels, dtype=torch.float32).masked_scatter(
+            valid_token_mask, valid_log_probs,
+        )
+        return log_probs, valid_token_mask
+
+    def _training_autocast(self):
+        if self.device != "cuda":
+            return nullcontext()
+        return torch.autocast(
+            "cuda", dtype=torch.bfloat16 if self._bf16_supported else torch.float16,
+        )
+
+    def _cache_policy_log_probs(self, dataset):
+        """Freeze old-policy and base-reference log probabilities before updates.
+
+        Only small [sample, token] arrays are kept on CPU. Disabling the current
+        LoRA uses the frozen base weights as pi_ref without a second GPU model.
+        """
+        if self.grpo_kl_beta > 0 and not callable(getattr(self.model, "disable_adapter", None)):
+            raise RuntimeError("GRPO KL requires a LoRA model exposing disable_adapter()")
+        model_device = next(self.model.parameters()).device
+        was_training = self.model.training
+        old_rows, ref_rows = [], []
+        self.model.eval()
+        try:
+            with torch.no_grad():
+                for start in range(0, len(dataset), self.per_device_train_batch_size):
+                    rows = dataset[start:start + self.per_device_train_batch_size]
+                    input_ids = torch.tensor(rows["input_ids"], dtype=torch.long, device=model_device)
+                    policy_mask = torch.tensor(rows["attention_mask"], dtype=torch.long, device=model_device)
+                    completion_mask = torch.tensor(rows["completion_mask"], dtype=torch.bool, device=model_device)
+                    labels = input_ids.masked_fill(~(completion_mask & policy_mask.bool()), -100)
+                    model_mask = self._causal_training_attention_mask(policy_mask)
+                    with self._training_autocast():
+                        outputs = self.model(input_ids=input_ids, attention_mask=model_mask)
+                        old_log_probs, _ = self._token_log_probs(outputs.logits, labels, policy_mask)
+                    old_rows.extend(old_log_probs.cpu().tolist())
+                    del outputs, old_log_probs
+
+                    if self.grpo_kl_beta > 0:
+                        with self.model.disable_adapter(), self._training_autocast():
+                            outputs = self.model(input_ids=input_ids, attention_mask=model_mask)
+                            ref_log_probs, _ = self._token_log_probs(outputs.logits, labels, policy_mask)
+                        ref_rows.extend(ref_log_probs.cpu().tolist())
+                        del outputs, ref_log_probs
+        finally:
+            self.model.train(was_training)
+
+        dataset = dataset.add_column("old_log_probs", old_rows)
+        if self.grpo_kl_beta > 0:
+            dataset = dataset.add_column("ref_log_probs", ref_rows)
         return dataset
 
     def compute_grpo_loss(
@@ -784,40 +1003,26 @@ class GRPOTrainer:
         rewards: torch.Tensor,
         attention_mask: torch.Tensor,
         token_penalty_weights: Optional[torch.Tensor] = None,
+        old_log_probs: Optional[torch.Tensor] = None,
+        ref_log_probs: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Compute PiT-PO loss with token-aware advantage estimation (Paper Eq. 11-12).
+        """Compute the clipped GRPO objective with PiT-PO token advantages.
 
         Token-aware advantage:
             A_hat_{i,k} = (R_global(o_i) - mu_group) / sigma_group  -  P_{i,k}
 
-        The policy gradient:
-            nabla J  proportional to  sum_{i,k} A_hat_{i,k} * nabla log pi(t_{i,k})
+        L = -mean_i mean_k[min(ratio * A, clip(ratio, 1-eps, 1+eps) * A)
+                          - beta * KL(pi_theta || pi_ref)]
+        old_log_probs/ref_log_probs have shape [batch, sequence_length - 1]
+        and are held fixed throughout this training update.
         """
         # Shift logits and labels for language modeling.  Unsloth pads with
         # <|finetune_right_pad_id|>, whose logit can be -inf.  Computing that
         # token's log-probability and multiplying it by an attention mask of
         # zero produces NaN gradients (0 * -inf).  Select valid token rows
         # before cross entropy so padding never enters the loss graph.
-        shift_logits = logits[..., :-1, :]
-        shift_labels = labels[..., 1:].contiguous()
-        valid_token_mask = attention_mask[..., 1:].to(dtype=torch.bool)
-        valid_token_mask = valid_token_mask & shift_labels.ne(-100)
-        if not bool(valid_token_mask.any()):
-            raise FloatingPointError("GRPO batch contains no valid language-model tokens")
-
-        valid_logits = shift_logits[valid_token_mask].float()
-        if os.environ.get("PITPO_DEBUG_NUMERICS") == "1":
-            valid_logits.register_hook(
-                _numeric_gradient_hook("valid_logits")
-            )
-        valid_labels = shift_labels[valid_token_mask]
-        valid_log_probs = -torch.nn.functional.cross_entropy(
-            valid_logits,
-            valid_labels,
-            reduction="none",
-        )
-        if not bool(torch.isfinite(valid_log_probs).all()):
-            raise FloatingPointError("GRPO produced non-finite valid-token log probabilities")
+        log_probs, valid_token_mask = self._token_log_probs(logits, labels, attention_mask)
+        valid_log_probs = log_probs[valid_token_mask]
 
         # === Group normalization of rewards (Paper Eq. 4) ===
         rewards = rewards.float()
@@ -833,7 +1038,7 @@ class GRPOTrainer:
 
         # === Token-aware advantage (Paper Eq. 11) ===
         # Expand normalized advantage to per-token: [batch_size, seq_len-1]
-        seq_advantages = normalized_advantages.unsqueeze(-1).expand_as(shift_labels)
+        seq_advantages = normalized_advantages.unsqueeze(-1).expand_as(log_probs)
 
         if token_penalty_weights is not None:
             shift_penalty = token_penalty_weights[..., 1:].float()
@@ -841,19 +1046,45 @@ class GRPOTrainer:
                 raise FloatingPointError("GRPO token penalties contain NaN or infinity")
             seq_advantages = seq_advantages - shift_penalty
 
-        # === Policy gradient loss (Paper Eq. 12) ===
-        valid_weighted_log_probs = (
-            seq_advantages[valid_token_mask] * valid_log_probs
-        )
-        weighted_log_probs = torch.zeros_like(seq_advantages).masked_scatter(
-            valid_token_mask,
-            valid_weighted_log_probs,
-        )
-        per_seq_loss = weighted_log_probs.sum(dim=-1) / valid_token_mask.sum(dim=-1).clamp_min(1)
-        grpo_loss = -per_seq_loss.mean()
+        if old_log_probs is None or old_log_probs.shape != log_probs.shape:
+            raise ValueError("Fixed old_log_probs must have shape [batch, sequence_length - 1]")
+        valid_old = old_log_probs.detach().float()[valid_token_mask]
+        if not bool(torch.isfinite(valid_old).all()):
+            raise FloatingPointError("GRPO old-policy log probabilities contain NaN or infinity")
+        ratios = torch.exp(valid_log_probs - valid_old)
+        if not bool(torch.isfinite(ratios).all()):
+            raise FloatingPointError("GRPO probability ratios contain NaN or infinity")
+        advantages = seq_advantages[valid_token_mask]
+        unclipped = ratios * advantages
+        clipped = ratios.clamp(1.0 - self.grpo_clip_epsilon, 1.0 + self.grpo_clip_epsilon) * advantages
+        surrogate = torch.minimum(unclipped, clipped)
+
+        # Non-negative per-token KL estimator used by GRPO (TRL/DeepSeekMath).
+        # expm1 is accurate when pi_ref and pi_theta are nearly identical.
+        kl = torch.zeros_like(valid_log_probs)
+        if self.grpo_kl_beta > 0:
+            if ref_log_probs is None or ref_log_probs.shape != log_probs.shape:
+                raise ValueError("Fixed ref_log_probs are required when grpo_kl_beta > 0")
+            valid_ref = ref_log_probs.detach().float()[valid_token_mask]
+            if not bool(torch.isfinite(valid_ref).all()):
+                raise FloatingPointError("GRPO reference log probabilities contain NaN or infinity")
+            ref_log_ratio = valid_ref - valid_log_probs
+            kl = (torch.expm1(ref_log_ratio) - ref_log_ratio).clamp_min(0.0)
+
+        def sequence_mean(values):
+            token_values = torch.zeros_like(log_probs).masked_scatter(valid_token_mask, values)
+            return (token_values.sum(dim=-1) / valid_token_mask.sum(dim=-1).clamp_min(1)).mean()
+
+        grpo_loss = sequence_mean(-surrogate + self.grpo_kl_beta * kl)
 
         if not bool(torch.isfinite(grpo_loss)):
             raise FloatingPointError("GRPO loss is NaN or infinity")
+
+        self._last_loss_metrics = {
+            "policy_loss": float(sequence_mean(-surrogate).detach().item()),
+            "kl": float(sequence_mean(kl).detach().item()),
+            "clip_fraction": float((unclipped > clipped).float().mean().detach().item()),
+        }
 
         return grpo_loss
 
@@ -879,6 +1110,8 @@ class GRPOTrainer:
             attention_mask = torch.tensor(item["attention_mask"], dtype=torch.long)
             labels = input_ids.clone()
             labels.masked_fill_(attention_mask.eq(0), -100)
+            if "completion_mask" in item:
+                labels.masked_fill_(torch.tensor(item["completion_mask"]).eq(0), -100)
             result = {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
@@ -886,6 +1119,9 @@ class GRPOTrainer:
                 "grpo_rewards": item["rewards"],  # use a different name to avoid being dropped
                 "token_penalty_weights": torch.tensor(item.get("token_penalty_weights", [0.0]*len(item["input_ids"])), dtype=torch.float32),
             }
+            for name in ("old_log_probs", "ref_log_probs"):
+                if name in item:
+                    result[name] = torch.tensor(item[name], dtype=torch.float32)
             # Debug info
             if idx == 0:  # print debug info only for the first sample
                 logger.info(f"Dataset __getitem__ returning keys: {list(result.keys())}")
@@ -928,7 +1164,6 @@ class GRPOTrainer:
         
         # Prepare training data
         dataset = self.prepare_training_data(experiences=selected_exps)
-        train_dataset = self.GRPOTrainingDataset(dataset)
         
         # Calculate buffer statistics for adaptive learning rate
         mse_values = [exp["mse"] for exp in selected_exps]
@@ -950,6 +1185,8 @@ class GRPOTrainer:
         # Moving a 4-bit model after construction is unsupported and would also
         # break the shared inference state.
         self.enter_training_mode()
+        dataset = self._cache_policy_log_probs(dataset)
+        train_dataset = self.GRPOTrainingDataset(dataset)
 
         # Define a custom data collator class
         class GRPODataCollator:
@@ -978,6 +1215,9 @@ class GRPOTrainer:
                     # token-level penalty weights
                     if "token_penalty_weights" in features[0]:
                         batch["token_penalty_weights"] = torch.stack([f["token_penalty_weights"] for f in features])
+                    for name in ("old_log_probs", "ref_log_probs"):
+                        if name in features[0]:
+                            batch[name] = torch.stack([f[name] for f in features])
                 
                 return batch
 
@@ -988,7 +1228,7 @@ class GRPOTrainer:
         # step.  CALM likewise keeps ownership of one model in one process.
         data_collator = GRPODataCollator(self.tokenizer)
         data_generator = torch.Generator()
-        data_generator.manual_seed(3408 + self.training_updates)
+        data_generator.manual_seed(getattr(self, 'seed', 3408) + self.training_updates)
         data_loader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=self.per_device_train_batch_size,
@@ -1025,6 +1265,7 @@ class GRPOTrainer:
             debug_numerics = os.environ.get("PITPO_DEBUG_NUMERICS") == "1"
             trace_training = os.environ.get("PITPO_TRACE_TRAIN") == "1"
             accumulated_losses: List[float] = []
+            loss_metrics: List[Dict[str, float]] = []
             optimizer_steps = 0
             optimizer.zero_grad(set_to_none=True)
 
@@ -1040,6 +1281,8 @@ class GRPOTrainer:
                     token_penalty_weights = batch.pop(
                         "token_penalty_weights", None
                     )
+                    old_log_probs = batch.pop("old_log_probs")
+                    ref_log_probs = batch.pop("ref_log_probs", None)
                     logger.info(
                         "GRPO epoch %d/%d batch %d/%d rewards=%s",
                         epoch_index + 1,
@@ -1063,20 +1306,7 @@ class GRPOTrainer:
                         self.gradient_accumulation_steps,
                         batches_in_epoch - window_start,
                     )
-                    if self.device == "cuda":
-                        autocast_context = torch.autocast(
-                            "cuda",
-                            dtype=(
-                                torch.bfloat16
-                                if self._bf16_supported
-                                else torch.float16
-                            ),
-                        )
-                    else:
-                        from contextlib import nullcontext
-                        autocast_context = nullcontext()
-
-                    with autocast_context:
+                    with self._training_autocast():
                         # Right-padded query rows can be fully masked inside
                         # the attention kernel and produce NaN activations.
                         # Even though their LM loss is masked, LoRA weight
@@ -1105,12 +1335,15 @@ class GRPOTrainer:
                             rewards=rewards,
                             attention_mask=policy_attention_mask,
                             token_penalty_weights=token_penalty_weights,
+                            old_log_probs=old_log_probs,
+                            ref_log_probs=ref_log_probs,
                         )
                         scaled_loss = raw_loss / (
                             float(window_size) * self.backward_stability_scale
                         )
 
                     accumulated_losses.append(float(raw_loss.detach().item()))
+                    loss_metrics.append(dict(self._last_loss_metrics))
                     if scaler.is_enabled():
                         scaler.scale(scaled_loss).backward()
                     else:
@@ -1232,7 +1465,12 @@ class GRPOTrainer:
             "evotune_reward_threshold": reward_thr,
             "evotune_filtered_valid": len(filtered),
             "model_version": self.training_updates,
+            "grpo_clip_epsilon": self.grpo_clip_epsilon,
+            "grpo_kl_beta": self.grpo_kl_beta,
+            "candidate_count": self.candidate_count,
         }
+        for name in ("policy_loss", "kl", "clip_fraction"):
+            stats[name] = float(np.mean([metrics[name] for metrics in loss_metrics]))
         # Curve logging
         try:
             self._append_curve_record(stats)
@@ -1275,9 +1513,8 @@ class GRPOTrainer:
 
     def should_train(self) -> bool:
         """
-        Determine if training should be triggered based on buffer state.
-        Start only after warmup: require at least warmup_min_global_samples observed,
-        and at least 1 valid experience in buffer.
+        Allow online training only after the candidate warmup and with valid data.
+        The default skips candidates 1..200 and first permits candidate 201.
         """
         # Require at least 1 valid experience
         valid_count = sum(1 for exp in self.training_buffer if self._is_valid_experience(exp))
@@ -1285,47 +1522,14 @@ class GRPOTrainer:
             logger.debug("should_train=False (no valid experiences)")
             return False
         
-        # Resolve warmup threshold defensively (handle None or wrong types)
-        threshold = getattr(self, "warmup_min_global_samples", None)
-        if threshold is None:
-            spp = getattr(self, "samples_per_prompt", None)
-            try:
-                if spp is not None:
-                    threshold = int(self.warmup_generations * int(spp) + 1)
-                else:
-                    threshold = int(self.warmup_generations + 1)
-            except Exception:
-                threshold = 1  # safest minimal default
-            # Cache back to the instance to avoid repeated computation
-            self.warmup_min_global_samples = int(threshold)
-        else:
-            try:
-                threshold = int(threshold)
-            except Exception:
-                threshold = 1
-                self.warmup_min_global_samples = threshold
-        
-        # Determine the maximum global sample index observed so far (from metadata) — robust to None/str/float
-        globals_list = []
-        for exp in self.training_buffer:
-            meta = exp.get("metadata", {}) or {}
-            for key in ("global_sample_nums", "global_sample_index"):
-                val = meta.get(key, None)
-                if val is None:
-                    continue
-                try:
-                    if isinstance(val, (int, float)) and np.isfinite(val):
-                        globals_list.append(int(val))
-                    elif isinstance(val, str) and val.strip() != "":
-                        globals_list.append(int(val.strip()))
-                except Exception:
-                    # Ignore unparsable values
-                    continue
-        max_global = max(globals_list) if globals_list else 0
-        
-        ok = max_global >= threshold
+        threshold = self.warmup_min_global_samples
+        ok = (
+            self.candidate_count >= threshold if threshold is not None
+            else self.candidate_count > self.warmup_samples
+        )
         logger.debug(
-            f"should_train={ok} | valid_count={valid_count} | max_global={max_global} | warmup_min_global_samples={threshold}"
+            "should_train=%s | valid_count=%s | candidate_count=%s | warmup_samples=%s",
+            ok, valid_count, self.candidate_count, self.warmup_samples,
         )
         return ok
     
@@ -1411,7 +1615,8 @@ class GRPOTrainer:
                     writer = csv.writer(f)
                     writer.writerow([
                         "step","timestamp","train_loss","avg_reward","avg_mse","min_mse","max_mse","mse_std",
-                        "buffer_size","used_samples","adaptive_lr","adaptive_batch_size","num_epochs"
+                        "buffer_size","used_samples","adaptive_lr","adaptive_batch_size","num_epochs",
+                        "policy_loss","kl","clip_fraction"
                     ])
             except Exception as e:
                 logger.warning(f"Failed to initialize curve CSV file: {e}")
@@ -1440,6 +1645,9 @@ class GRPOTrainer:
             stats.get('adaptive_lr',''),
             stats.get('adaptive_batch_size',''),
             stats.get('num_epochs',''),
+            stats.get('policy_loss',''),
+            stats.get('kl',''),
+            stats.get('clip_fraction',''),
         ]
         # Write CSV
         try:

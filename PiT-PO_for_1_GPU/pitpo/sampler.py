@@ -32,7 +32,7 @@ class LLM(ABC):
 class Sampler:
     """Samples programs and evaluates them sequentially against one shared model."""
 
-    _global_samples_nums: int = 1
+    _global_samples_nums: int = 0
 
     def __init__(
         self,
@@ -57,9 +57,12 @@ class Sampler:
                 break
 
             prompt = self._database.get_prompt()
+            previous_sample_count = self._get_global_sample_nums()
             reset_time = time.time()
             samples = self._llm.draw_samples(prompt.code, self.config)
             sample_time = (time.time() - reset_time) / self._samples_per_prompt
+            sample_indices = getattr(self._llm, "last_sample_indices", range(1, len(samples) + 1))
+            drawn_count = getattr(self._llm, "last_draw_sample_count", len(samples))
 
             transition_seconds = None
             consume_transition = getattr(
@@ -71,9 +74,11 @@ class Sampler:
             if transition_seconds is not None and profiler is not None:
                 profiler.add_train_to_generation_time(transition_seconds)
 
-            for sample in samples:
-                self._global_samples_nums_plus_one()
-                cur_global_sample_nums = self._get_global_sample_nums()
+            for relative_index, sample in zip(sample_indices, samples):
+                cur_global_sample_nums = previous_sample_count + relative_index
+                if self._max_sample_nums and cur_global_sample_nums > self._max_sample_nums:
+                    break
+                self.set_global_sample_nums(cur_global_sample_nums)
                 chosen_evaluator: evaluator.Evaluator = np.random.choice(self._evaluators)
                 chosen_evaluator.analyse(
                     sample,
@@ -84,6 +89,12 @@ class Sampler:
                     sample_time=sample_time,
                     original_prompt=prompt.code,
                 )
+            # Count every generated candidate, including bodies dropped during
+            # parsing, so the warmup boundary follows candidate 200 exactly.
+            drawn_total = previous_sample_count + drawn_count
+            if self._max_sample_nums:
+                drawn_total = min(drawn_total, self._max_sample_nums)
+            self.set_global_sample_nums(drawn_total)
 
     def _get_global_sample_nums(self) -> int:
         return self.__class__._global_samples_nums
@@ -228,7 +239,12 @@ class LocalLLM(LLM):
             if self._trim
             else list(raw_samples)
         )
-        valid = [sample for sample in samples if _is_valid_generated_body(sample)]
+        self.last_draw_sample_count = len(samples)
+        self.last_sample_indices = [
+            index for index, sample in enumerate(samples, start=1)
+            if _is_valid_generated_body(sample)
+        ]
+        valid = [samples[index - 1] for index in self.last_sample_indices]
         dropped = len(samples) - len(valid)
         if dropped:
             print(f"[WARN] Dropped {dropped} invalid generated function bodies")
