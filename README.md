@@ -6,6 +6,9 @@ This repository presents the open-source resources associated with the paper [**
 
 ## 📰 News
 
+- **[2026/11]** The [PaddlePaddle version](https://github.com/CAS-CLab/PiT-PO/tree/main/PiT-PO_for_Paddle) of PiT-PO is now available as part of our CCF-Baidu Open Fund project!
+- **[2026/08]** A [single-GPU version](https://github.com/CAS-CLab/PiT-PO/tree/main/PiT-PO_for_1_GPU) of PiT-PO is now available!
+- **[2026/08]** Our paper is now available in the [ACM Digital Library](https://dl.acm.org/doi/10.1145/3770855.3818869)!
 - **[2026/05]** Our paper has been accepted by **KDD 2026 AI for Science Track**!
 - **[2026/02]** Our paper is now available on [arXiv](https://arxiv.org/abs/2602.10576)!
 
