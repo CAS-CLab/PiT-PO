@@ -1,0 +1,15 @@
+{
+  "state": "completed",
+  "gpu": 1,
+  "seed": 3409,
+  "max_samples": 2500,
+  "queue_pid": 915051,
+  "queued_utc": "2026-10-31T15:01:42.156191+00:00",
+  "updated_utc": "2026-10-31T21:06:21.523297+00:00",
+  "free_memory_mib": 24217,
+  "used_memory_mib": 0,
+  "process_pid": 915169,
+  "started_utc": "2026-10-31T15:01:52.225033+00:00",
+  "exit_code": 0,
+  "finished_utc": "2026-10-31T21:06:21.523267+00:00"
+}

@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.runtime/
+artifacts/
+.venv/
+.env
+last_run.txt
+last_campaign.txt
+*.pdparams
+*.pdopt
+*.safetensors
+*.bin

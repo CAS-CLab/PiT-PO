@@ -1,0 +1,4 @@
+-r requirements.txt
+paconvert==3.3.1
+openpyxl==3.1.5
+pytest>=8,<10

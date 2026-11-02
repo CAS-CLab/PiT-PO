@@ -1,0 +1,11 @@
+{
+  "framework": "paddle",
+  "completed": true,
+  "generated_candidates": 2500,
+  "grpo_enabled": true,
+  "training_updates": 1159,
+  "model_name": "/finder/wangboxiao/LLM-Research/Llama-3.2-3B-Instruct/LLM-Research/Llama-3___2-3B-Instruct",
+  "device": "gpu:0",
+  "best_score": -1.79742309228106e-21,
+  "best_function": "def equation(x: np.ndarray, v: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for acceleration in a damped nonlinear oscillator\n\n    Args:\n        x: A numpy array representing observations of current position.\n        v: A numpy array representing observations of velocity.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing acceleration as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    a = params[0] * x + params[1] * v + params[2] * (x**2 - v**2/2) + params[3] * x * v + params[4] * x**3 + params[5] * v**3 + params[6] * np.sin(params[7] * x) + params[8] * np.cos(params[9] * v)\n    return a"
+}
