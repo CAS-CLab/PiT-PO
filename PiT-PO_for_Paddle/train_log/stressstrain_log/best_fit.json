@@ -1,0 +1,23 @@
+{
+  "sample_order": 1486,
+  "test_input": "data",
+  "reported_train_mse": 0.0011046742370903857,
+  "optimized_params": [
+    0.8901769459509683,
+    -1.4377083597878886,
+    0.5012431793918314,
+    0.021957383581745572,
+    0.8393982118762867,
+    -1.0723602838298227,
+    0.08747733809109379,
+    -2.710635804729246,
+    71.69320494959597,
+    0.9552406456157992
+  ],
+  "function_name": "equation",
+  "optimized_params_dtype": "float64",
+  "function": "def equation(strain: np.ndarray, temp: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for stress in Aluminium rod\n\n    Args:\n        strain: A numpy array representing observations of strain.\n        temp: A numpy array representing observations of temperature.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing stress as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    from scipy.special import expit\n    x = strain ** 2 + temp ** 2 + params[0] * strain * temp + params[1] * np.sin(params[2] * strain + params[3] * temp) + \\\n    params[4] * np.cos(params[5] * strain + params[6] * temp) + params[7] * np.tanh(params[8] * strain + params[9] * temp)\n    stress = params[0] * x**2 + params[1] * (np.exp(x) - 1) + params[2] * x + params[3] + params[0] * np.sinh(params[9] * x)\n    return stress",
+  "program": "\"\"\"\nFind the mathematical function skeleton that represents stress, given data on strain and temperature in an Aluminium rod for both elastic and plastic regions.\n\"\"\"\n\n\nimport numpy as np\n\n#Initialize parameters\nMAX_NPARAMS = 10\nparams = [1.0]*MAX_NPARAMS\n\n\n\ndef evaluate(data: dict) -> float:\n    \"\"\" Evaluate the equation on data observations.\"\"\"\n    inputs, outputs = data['inputs'], data['outputs']\n    strain, temp = inputs[:,0], inputs[:,1]\n    \n    # Optimize parameters based on data\n    from scipy.optimize import minimize\n    def loss(params):\n        y_pred = equation(strain, temp, params)\n        return np.mean((y_pred - outputs) ** 2)\n\n    loss_partial = lambda params: loss(params)\n    result = minimize(loss_partial, [1.0]*MAX_NPARAMS, method='BFGS')\n    \n    # Return evaluation score\n    optimized_params = result.x\n    loss = result.fun\n\n    if np.isnan(loss) or np.isinf(loss):\n        return None\n    else:\n        return -loss\n\n\ndef equation(strain: np.ndarray, temp: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for stress in Aluminium rod\n\n    Args:\n        strain: A numpy array representing observations of strain.\n        temp: A numpy array representing observations of temperature.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing stress as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    from scipy.special import expit\n    x = strain ** 2 + temp ** 2 + params[0] * strain * temp + params[1] * np.sin(params[2] * strain + params[3] * temp) + \\\n    params[4] * np.cos(params[5] * strain + params[6] * temp) + params[7] * np.tanh(params[8] * strain + params[9] * temp)\n    stress = params[0] * x**2 + params[1] * (np.exp(x) - 1) + params[2] * x + params[3] + params[0] * np.sinh(params[9] * x)\n    return stress\n\n",
+  "fit_mode": "grouped",
+  "coefficient_source": "original sandbox fit; no refitting"
+}

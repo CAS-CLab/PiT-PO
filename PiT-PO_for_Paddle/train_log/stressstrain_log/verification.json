@@ -1,0 +1,45 @@
+{
+  "record": "best_fit.json",
+  "sample_order": 1486,
+  "reported_train_mse": 0.0011046742370903857,
+  "metrics": {
+    "train": {
+      "mse": 0.0011046742370903857,
+      "rmse": 0.033236639978950724,
+      "max_abs_error": 0.7947389761043242,
+      "finite_predictions": true,
+      "n": 2161
+    },
+    "test_id": {
+      "mse": 0.001313416132942708,
+      "rmse": 0.036241083495705644,
+      "max_abs_error": 0.9000806570786546,
+      "finite_predictions": true,
+      "n": 1442
+    },
+    "test_ood": {
+      "mse": 0.0008802165544393756,
+      "rmse": 0.02966844374818766,
+      "max_abs_error": 0.4273135953009368,
+      "finite_predictions": true,
+      "n": 738
+    }
+  },
+  "score_reproduced": true,
+  "target_mse": 1e-30,
+  "target_met": false,
+  "refit": false,
+  "optimized_params": [
+    0.8901769459509683,
+    -1.4377083597878886,
+    0.5012431793918314,
+    0.021957383581745572,
+    0.8393982118762867,
+    -1.0723602838298227,
+    0.08747733809109379,
+    -2.710635804729246,
+    71.69320494959597,
+    0.9552406456157992
+  ],
+  "function": "def equation(strain: np.ndarray, temp: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for stress in Aluminium rod\n\n    Args:\n        strain: A numpy array representing observations of strain.\n        temp: A numpy array representing observations of temperature.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing stress as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    from scipy.special import expit\n    x = strain ** 2 + temp ** 2 + params[0] * strain * temp + params[1] * np.sin(params[2] * strain + params[3] * temp) + \\\n    params[4] * np.cos(params[5] * strain + params[6] * temp) + params[7] * np.tanh(params[8] * strain + params[9] * temp)\n    stress = params[0] * x**2 + params[1] * (np.exp(x) - 1) + params[2] * x + params[3] + params[0] * np.sinh(params[9] * x)\n    return stress"
+}

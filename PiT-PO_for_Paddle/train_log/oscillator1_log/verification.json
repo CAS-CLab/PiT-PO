@@ -1,0 +1,45 @@
+{
+  "record": "best_fit.json",
+  "sample_order": 1800,
+  "reported_train_mse": 5.2180852519881745e-28,
+  "metrics": {
+    "train": {
+      "mse": 5.2180852519881745e-28,
+      "rmse": 2.2843128621071534e-14,
+      "max_abs_error": 4.8933079810353775e-14,
+      "finite_predictions": true,
+      "n": 10000
+    },
+    "test_id": {
+      "mse": 5.218577813053762e-28,
+      "rmse": 2.2844206733992234e-14,
+      "max_abs_error": 4.9030224325008476e-14,
+      "finite_predictions": true,
+      "n": 10000
+    },
+    "test_ood": {
+      "mse": 4.5738230608836046e-17,
+      "rmse": 6.763004554843657e-09,
+      "max_abs_error": 2.0202782863298907e-08,
+      "finite_predictions": true,
+      "n": 10000
+    }
+  },
+  "score_reproduced": true,
+  "target_mse": 1e-30,
+  "target_met": false,
+  "refit": false,
+  "optimized_params": [
+    -2.6313604876676477e-15,
+    2.3250966457844817,
+    -0.4233180575720307,
+    -1.150403875147619,
+    1.0870548599344207,
+    -0.5000000000000138,
+    2.4748001914025295,
+    1.5217591371085517e-15,
+    0.004040146245975039,
+    -0.5000000000001412
+  ],
+  "function": "def equation(x: np.ndarray, v: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for acceleration in a damped nonlinear oscillator\n\n    Args:\n        x: A numpy array representing observations of current position.\n        v: A numpy array representing observations of velocity.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing acceleration as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    a0, b0, c0, f0, e0, f1, g0, h0, i0, j0 = params\n    dv = \\\n    a0 * (v**2 - 2*e0*v) + \\\n    b0 * np.sin(f0 * x) + \\\n    c0 * x**3 + \\\n    f1 * x * v + \\\n    g0 * x + \\\n    h0 * v + \\\n    i0 * x**5 + \\\n    j0 * v**3\n    return dv"
+}

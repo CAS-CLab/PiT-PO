@@ -1,0 +1,59 @@
+{
+  "captured_utc": "2026-11-12T02:58:48.781319+00:00",
+  "model": "Llama-3.2-3B-Instruct",
+  "precision": "bfloat16",
+  "metric": "ID test NMSE = MSE / population variance of test targets",
+  "selection": "Minimum training MSE across historical and current Paddle trials; original coefficients replayed on ID test data",
+  "paddle": {
+    "bactgrow": {
+      "sample_order": 358,
+      "train_mse": 0.0006017882152473627,
+      "id_mse": 0.0005471369388223186,
+      "id_target_variance": 0.01990226548470312,
+      "id_nmse": 0.027491188841936014,
+      "log_directory": "bactgrow_log",
+      "state": "running",
+      "generated_candidates": 516,
+      "optimizer_steps": 248
+    },
+    "oscillator1": {
+      "sample_order": 1800,
+      "train_mse": 5.2180852519881745e-28,
+      "id_mse": 5.218577813053762e-28,
+      "id_target_variance": 0.004362932505432197,
+      "id_nmse": 1.1961170168358595e-25,
+      "log_directory": "oscillator1_log",
+      "state": "completed",
+      "generated_candidates": 2500,
+      "optimizer_steps": 1213
+    },
+    "oscillator2": {
+      "sample_order": 159,
+      "train_mse": 6.76055215698337e-11,
+      "id_mse": 6.770627460367159e-11,
+      "id_target_variance": 0.16406648250331998,
+      "id_nmse": 4.1267584683118635e-10,
+      "log_directory": "oscillator2_log",
+      "state": "cancelled",
+      "generated_candidates": 1920,
+      "optimizer_steps": 602
+    },
+    "stressstrain": {
+      "sample_order": 1486,
+      "train_mse": 0.0011046742370903857,
+      "id_mse": 0.001313416132942708,
+      "id_target_variance": 0.07467783233188684,
+      "id_nmse": 0.017587764560513225,
+      "log_directory": "stressstrain_log",
+      "state": "completed",
+      "generated_candidates": 2500,
+      "optimizer_steps": 1131
+    }
+  },
+  "pitpo_paper": {
+    "bactgrow": 0.0248,
+    "oscillator1": 7.58e-31,
+    "oscillator2": 9.77e-10,
+    "stressstrain": 0.0156
+  }
+}

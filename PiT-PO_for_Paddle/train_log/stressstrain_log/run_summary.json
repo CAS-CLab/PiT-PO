@@ -1,0 +1,11 @@
+{
+  "framework": "paddle",
+  "completed": true,
+  "generated_candidates": 2500,
+  "grpo_enabled": true,
+  "training_updates": 1131,
+  "model_name": "Llama-3.2-3B-Instruct",
+  "device": "gpu:0",
+  "best_score": -0.0011046742370903857,
+  "best_function": "def equation(strain: np.ndarray, temp: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for stress in Aluminium rod\n\n    Args:\n        strain: A numpy array representing observations of strain.\n        temp: A numpy array representing observations of temperature.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing stress as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    from scipy.special import expit\n    x = strain ** 2 + temp ** 2 + params[0] * strain * temp + params[1] * np.sin(params[2] * strain + params[3] * temp) + \\\n    params[4] * np.cos(params[5] * strain + params[6] * temp) + params[7] * np.tanh(params[8] * strain + params[9] * temp)\n    stress = params[0] * x**2 + params[1] * (np.exp(x) - 1) + params[2] * x + params[3] + params[0] * np.sinh(params[9] * x)\n    return stress"
+}

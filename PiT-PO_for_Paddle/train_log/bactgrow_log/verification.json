@@ -1,0 +1,45 @@
+{
+  "record": "best_fit.json",
+  "sample_order": 358,
+  "reported_train_mse": 0.0006017882152473627,
+  "metrics": {
+    "train": {
+      "mse": 0.0006017882152473627,
+      "rmse": 0.02453137206206295,
+      "max_abs_error": 0.38069815625534953,
+      "finite_predictions": true,
+      "n": 7500
+    },
+    "test_id": {
+      "mse": 0.0005471369388223186,
+      "rmse": 0.023390958484472556,
+      "max_abs_error": 0.3248829846414971,
+      "finite_predictions": true,
+      "n": 2500
+    },
+    "test_ood": {
+      "mse": 0.04424289976649672,
+      "rmse": 0.21033996236211683,
+      "max_abs_error": 4.847637579775216,
+      "finite_predictions": true,
+      "n": 15000
+    }
+  },
+  "score_reproduced": true,
+  "target_mse": 1e-30,
+  "target_met": false,
+  "refit": false,
+  "optimized_params": [
+    0.13479329306894824,
+    -0.4505532768986812,
+    -0.06093761450465566,
+    -0.02854018297024258,
+    -0.4449308699740681,
+    7.138963693037844e-06,
+    3.1113028930338013e-06,
+    0.016463007910067322,
+    6.842380305295044,
+    0.5964943178745725
+  ],
+  "function": "def equation(b: np.ndarray, s: np.ndarray, temp: np.ndarray, pH: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for bacterial growth rate\n\n    Args:\n        b: A numpy array representing observations of population density of the bacterial species.\n        s: A numpy array representing observations of substrate concentration.\n        temp: A numpy array representing observations of temperature.\n        pH: A numpy array representing observations of pH level.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing bacterial growth rate as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    x = np.sin(params[0] * temp) * np.cos(params[1] * pH)\n    y = np.exp(params[2] * s**2 + params[3] * b**2)\n    z = np.cosh(params[4] * (b + s)) * np.sinh(params[5] * temp + params[6] * pH)\n    w = np.exp(params[7] * b * s) * np.exp(params[8] * x)\n    return w * y * z"
+}

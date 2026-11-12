@@ -1,0 +1,13 @@
+{
+  "total_sample_time": 7349.727096199989,
+  "total_evaluate_time": 6581.92978477478,
+  "total_grpo_time": 528.9728136062622,
+  "num_samples_logged": 2280,
+  "num_grpo_trainings": 21,
+  "num_train_to_generation_transitions": 21,
+  "avg_sample_time": 3.223564515877188,
+  "avg_evaluate_time": 2.8868113091117458,
+  "avg_grpo_time": 25.189181600298202,
+  "avg_train_to_generation_time": 16.953718523894036,
+  "max_train_to_generation_time": 29.581153087317944
+}

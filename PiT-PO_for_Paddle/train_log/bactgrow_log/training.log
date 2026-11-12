@@ -1,0 +1,52 @@
+2026-11-12 02:09:22,727 - launch_grpo - INFO - Starting Paddle PiT-PO: task=bactgrow model=Llama-3.2-3B-Instruct device=gpu:0 output=bactgrow_log
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss function: auxiliary
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss function: z_loss
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss function: entropy
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss function: sparsity
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss function: diversity
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss combiner: weighted_sum
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss combiner: adaptive_sum
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss combiner: geometric_mean
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss function: custom_diversity_loss1
+2026-11-12 02:09:23,501 - paddleformers.nn.moe_deepep.moe_loss - INFO - Registering loss combiner: custom_weighted_sum_combiner1
+2026-11-12 02:09:32,654 - pitpo.grpo_trainer - INFO - Verified 254 converted pretrained parameter shapes and 3 loaded parameter slices; tied head=True
+2026-11-12 02:09:32,655 - pitpo.grpo_trainer - INFO - Enabled full-layer non-reentrant activation recompute for Llama LoRA
+2026-11-12 02:09:32,775 - pitpo.grpo_trainer - INFO - Paddle shared model ready: Llama-3.2-3B-Instruct, device=gpu:0, LoRA=True
+2026-11-12 02:09:32,776 - pitpo.grpo_trainer - INFO - Reward curves and metrics will be written to: bactgrow_log/reward_curves
+2026-11-12 02:09:32,776 - pitpo.evaluator - INFO - Using GRPO training strategy: continuous
+2026-11-12 02:09:32,776 - pitpo.evaluator - INFO - Strategy description: Continuous: trains on every evaluation, maximizing learning frequency
+2026-11-12 02:09:32,776 - pitpo.evaluator - INFO - GRPO will trigger one fine-tune step every 64 valid samples
+2026-11-12 02:09:34,603 - absl - INFO - Best score of island 0 increased to -0.0167342189102571
+2026-11-12 02:09:34,605 - absl - INFO - Best score of island 1 increased to -0.0167342189102571
+2026-11-12 02:09:34,607 - absl - INFO - Best score of island 2 increased to -0.0167342189102571
+2026-11-12 02:09:34,607 - absl - INFO - Best score of island 3 increased to -0.0167342189102571
+2026-11-12 02:09:51,380 - absl - INFO - Best score of island 3 increased to -0.015959579102335752
+2026-11-12 02:10:06,644 - absl - INFO - Best score of island 0 increased to -0.015750371405015322
+2026-11-12 02:10:46,718 - absl - INFO - Best score of island 1 increased to -0.01579354771005337
+2026-11-12 02:11:45,759 - absl - INFO - Best score of island 2 increased to -0.016376771774295303
+2026-11-12 02:12:28,693 - absl - INFO - Best score of island 1 increased to -0.015793491474617945
+2026-11-12 02:12:44,225 - absl - INFO - Best score of island 3 increased to -0.014826412214330616
+2026-11-12 02:13:12,827 - absl - INFO - Best score of island 1 increased to -0.015592228741333633
+2026-11-12 02:13:36,146 - absl - INFO - Best score of island 3 increased to -0.014231977102820668
+2026-11-12 02:14:11,836 - absl - INFO - Best score of island 2 increased to -0.01604966406079255
+2026-11-12 02:14:18,087 - absl - INFO - Best score of island 2 increased to -0.016037539178065538
+2026-11-12 02:14:42,770 - absl - INFO - Best score of island 2 increased to -0.009663932215460119
+2026-11-12 02:15:05,435 - absl - INFO - Best score of island 1 increased to -0.014580618703196368
+2026-11-12 02:15:49,417 - absl - INFO - Best score of island 0 increased to -0.01572449777735095
+2026-11-12 02:17:30,423 - absl - INFO - Best score of island 3 increased to -0.01313993768644802
+2026-11-12 02:17:43,894 - absl - INFO - Best score of island 1 increased to -0.00971682209874083
+2026-11-12 02:18:05,781 - absl - INFO - Best score of island 3 increased to -0.01282314312007954
+2026-11-12 02:18:48,719 - absl - INFO - Best score of island 0 increased to -0.0130167100081138
+2026-11-12 02:19:28,077 - absl - INFO - Best score of island 3 increased to -0.012639808302095741
+2026-11-12 02:19:36,769 - absl - INFO - Best score of island 3 increased to -0.011041311563463435
+2026-11-12 02:19:36,773 - pitpo.grpo_trainer - INFO - Buffer stats - Size: 100, MSE range: [9.66e-03, 1.50e+04], MSE mean: 2.39e+02
+2026-11-12 02:19:50,899 - absl - INFO - Best score of island 0 increased to -0.012776651623937372
+2026-11-12 02:21:06,812 - absl - INFO - Best score of island 0 increased to -0.010304972033930687
+2026-11-12 02:21:12,889 - absl - INFO - Best score of island 0 increased to -0.008494642418705433
+2026-11-12 02:28:48,844 - absl - INFO - Best score of island 3 increased to -0.010715812916616522
+2026-11-12 02:31:26,190 - pitpo.grpo_trainer - INFO - Buffer stats - Size: 200, MSE range: [8.49e-03, 1.50e+04], MSE mean: 1.23e+02
+2026-11-12 02:31:35,952 - absl - INFO - Best score of island 3 increased to -0.00993657557799731
+2026-11-12 02:41:42,100 - absl - INFO - Best score of island 1 increased to -0.0006017882152473627
+2026-11-12 02:44:26,124 - absl - INFO - Best score of island 2 increased to -0.007557551234552384
+2026-11-12 02:45:18,639 - pitpo.grpo_trainer - INFO - Buffer stats - Size: 300, MSE range: [6.02e-04, 2.55e+113], MSE mean: 8.49e+110
+2026-11-12 02:55:15,842 - absl - INFO - Best score of island 3 increased to -0.009796067197505389

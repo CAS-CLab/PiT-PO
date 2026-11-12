@@ -1,0 +1,23 @@
+{
+  "sample_order": 159,
+  "test_input": "data",
+  "reported_train_mse": 6.76055215698337e-11,
+  "optimized_params": [
+    -2.38708735476963e-06,
+    -4.999823289336514,
+    0.00022432258265938536,
+    -2.5026368666224257,
+    -6.116532722218731e-06,
+    -0.9999855476724909,
+    -0.621791823043628,
+    -0.5000153023225973,
+    -0.30000019583285376,
+    -1.0000001107255763
+  ],
+  "function_name": "equation",
+  "optimized_params_dtype": "float64",
+  "function": "def equation(t: np.ndarray, x: np.ndarray, v: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for acceleration in a damped nonlinear oscillator\n\n    Args:\n        t: A numpy array representing time.\n        x: A numpy array representing observations of current position.\n        v: A numpy array representing observations of velocity.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing acceleration as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    a = params[0] * v + params[1] * x + params[2] * (v ** 2 / 2) + params[3] * x ** 2 + params[4] * t * x + params[5] * v * x + params[6] * x ** 3 + params[7] * v ** 3 + params[8] * np.sin(params[9] * t)\n    return a",
+  "program": "\"\"\"\nFind the mathematical function skeleton that represents acceleration in a damped nonlinear oscillator system with driving force, given data on time, position, and velocity. \n\"\"\"\n\n\nimport numpy as np\n\n#Initialize parameters\nMAX_NPARAMS = 10\nPRAMS_INIT = [1.0]*MAX_NPARAMS\n\n\ndef evaluate(data: dict) -> float:\n    \"\"\" Evaluate the equation on data observations.\"\"\"\n    inputs, outputs = data['inputs'], data['outputs']\n    t, x, v = inputs[:,0], inputs[:,1], inputs[:,2]\n    \n    # Optimize parameters based on data\n    from scipy.optimize import minimize\n    def loss(params):\n        y_pred = equation(t, x, v, params)\n        return np.mean((y_pred - outputs) ** 2)\n\n    loss_partial = lambda params: loss(params)\n    result = minimize(loss_partial, [1.0]*MAX_NPARAMS, method='BFGS')\n    \n    # Return evaluation score\n    optimized_params = result.x\n    loss = result.fun\n\n    if np.isnan(loss) or np.isinf(loss):\n        return None\n    else:\n        return -loss\n\n\ndef equation(t: np.ndarray, x: np.ndarray, v: np.ndarray, params: np.ndarray) -> np.ndarray:\n    \"\"\" Mathematical function for acceleration in a damped nonlinear oscillator\n\n    Args:\n        t: A numpy array representing time.\n        x: A numpy array representing observations of current position.\n        v: A numpy array representing observations of velocity.\n        params: Array of numeric constants or parameters to be optimized\n\n    Return:\n        A numpy array representing acceleration as the result of applying the mathematical function to the inputs.\n    \"\"\"\n    a = params[0] * v + params[1] * x + params[2] * (v ** 2 / 2) + params[3] * x ** 2 + params[4] * t * x + params[5] * v * x + params[6] * x ** 3 + params[7] * v ** 3 + params[8] * np.sin(params[9] * t)\n    return a\n\n",
+  "fit_mode": "grouped",
+  "coefficient_source": "original sandbox fit; no refitting"
+}
